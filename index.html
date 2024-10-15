@@ -1,0 +1,185 @@
+<html><head><base href="https://websim.ai"><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Multiplayer ASCII Webcam</title>
+<style>
+  body {
+    font-family: monospace;
+    background-color: #222;
+    color: #fff;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    margin: 0;
+    overflow: hidden;
+  }
+  #asciiOutput {
+    white-space: pre;
+    font-size: 4px;
+    line-height: 1;
+    background-color: #000;
+    padding: 10px;
+    border-radius: 5px;
+  }
+  #controls {
+    margin-top: 20px;
+  }
+  button {
+    background-color: #4CAF50;
+    border: none;
+    color: white;
+    padding: 10px 20px;
+    text-align: center;
+    text-decoration: none;
+    display: inline-block;
+    font-size: 16px;
+    margin: 4px 2px;
+    cursor: pointer;
+    border-radius: 5px;
+  }
+  #peers {
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    background-color: rgba(0, 0, 0, 0.5);
+    padding: 10px;
+    border-radius: 5px;
+  }
+  .peer {
+    display: flex;
+    align-items: center;
+    margin-bottom: 5px;
+  }
+  .peer img {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    margin-right: 10px;
+  }
+</style>
+</head>
+<body>
+<div id="asciiOutput"></div>
+<div id="controls">
+  <button id="startBtn">Start Webcam</button>
+  <button id="stopBtn" disabled>Stop</button>
+</div>
+<div id="peers"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.3.2/socket.io.js"></script>
+<script>
+const room = new WebsimSocket();
+const asciiOutput = document.getElementById('asciiOutput');
+const startBtn = document.getElementById('startBtn');
+const stopBtn = document.getElementById('stopBtn');
+const peersDiv = document.getElementById('peers');
+
+let mediaRecorder;
+let recordedChunks = [];
+let isRecording = false;
+
+const asciiChars = ['@', '#', 'S', '%', '?', '*', '+', ';', ':', ',', '.'];
+
+function updatePeers() {
+  peersDiv.innerHTML = '';
+  Object.entries(room.party.peers).forEach(([clientId, peer]) => {
+    const peerElement = document.createElement('div');
+    peerElement.className = 'peer';
+    peerElement.innerHTML = `
+      <img src="${peer.avatarUrl}" alt="${peer.username}'s avatar">
+      <span>${peer.username}</span>
+    `;
+    peersDiv.appendChild(peerElement);
+  });
+}
+
+room.onPeersChanged = updatePeers;
+
+function getAsciiFrame(imageData, width, height) {
+  let asciiFrame = '';
+  for (let y = 0; y < height; y += 2) {
+    for (let x = 0; x < width; x++) {
+      const index = (y * width + x) * 4;
+      const brightness = (imageData[index] + imageData[index + 1] + imageData[index + 2]) / 3;
+      const charIndex = Math.floor(brightness / 25);
+      asciiFrame += asciiChars[charIndex] || ' ';
+    }
+    asciiFrame += '\n';
+  }
+  return asciiFrame;
+}
+
+function processVideoChunk(chunk) {
+  const video = document.createElement('video');
+  video.src = URL.createObjectURL(new Blob([chunk], { type: 'video/webm' }));
+  
+  video.onloadedmetadata = () => {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = 160;
+    canvas.height = 120;
+
+    video.currentTime = 0;
+    video.play();
+
+    function processFrame() {
+      if (video.ended) {
+        return;
+      }
+
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+      const asciiFrame = getAsciiFrame(imageData, canvas.width, canvas.height);
+
+      room.send({
+        type: 'asciiFrame',
+        frame: asciiFrame
+      });
+
+      requestAnimationFrame(processFrame);
+    }
+
+    processFrame();
+  };
+}
+
+startBtn.addEventListener('click', async () => {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+    mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+
+    mediaRecorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        recordedChunks.push(event.data);
+        processVideoChunk(event.data);
+      }
+    };
+
+    mediaRecorder.start(1000);
+    isRecording = true;
+    startBtn.disabled = true;
+    stopBtn.disabled = false;
+  } catch (error) {
+    console.error('Error accessing webcam:', error);
+  }
+});
+
+stopBtn.addEventListener('click', () => {
+  if (mediaRecorder && isRecording) {
+    mediaRecorder.stop();
+    isRecording = false;
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+  }
+});
+
+room.onmessage = (event) => {
+  const data = event.data;
+  if (data.type === 'asciiFrame') {
+    asciiOutput.textContent = data.frame;
+  }
+};
+
+updatePeers();
+</script>
+<script defer src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon='{"version":"2024.11.0","token":"4c6229722a6346bc8eb5cb0e5eae5d41","server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
+</body></html>
