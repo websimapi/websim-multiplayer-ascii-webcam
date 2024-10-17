@@ -1,4 +1,4 @@
-<html><head><base href="https://websim.ai"><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Multiplayer ASCII Webcam Grid</title>
+<html><head><base href="https://websim.ai"><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Multiplayer ASCII Webcam Grid with Audio</title>
 <style>
   body {
     font-family: monospace;
@@ -71,12 +71,21 @@
     border-radius: 50%;
     margin-right: 10px;
   }
+  .audioControl {
+    position: absolute;
+    bottom: 5px;
+    right: 5px;
+    background-color: rgba(0, 0, 0, 0.7);
+    padding: 2px 5px;
+    font-size: 10px;
+    cursor: pointer;
+  }
 </style>
 </head>
 <body>
 <div id="asciiGrid"></div>
 <div id="controls">
-  <button id="startBtn">Start Webcam</button>
+  <button id="startBtn">Start Webcam & Audio</button>
   <button id="stopBtn" disabled>Stop</button>
 </div>
 <div id="peers"></div>
@@ -90,6 +99,9 @@ const peersDiv = document.getElementById('peers');
 
 let mediaRecorder;
 let isRecording = false;
+let audioContext;
+let analyser;
+let audioDataArray;
 
 const asciiChars = ['@', '#', 'S', '%', '?', '*', '+', ';', ':', ',', '.'];
 
@@ -117,19 +129,28 @@ function updateAsciiGrid() {
     usernameElement.className = 'username';
     usernameElement.textContent = peer.username;
     asciiOutput.appendChild(usernameElement);
+    const audioControl = document.createElement('div');
+    audioControl.className = 'audioControl';
+    audioControl.textContent = '🔊';
+    audioControl.onclick = () => toggleAudio(clientId);
+    asciiOutput.appendChild(audioControl);
     asciiGrid.appendChild(asciiOutput);
   });
 }
 
 room.onPeersChanged = updatePeers;
 
-function getAsciiFrame(imageData, width, height) {
+function getAsciiFrame(imageData, width, height, audioLevel) {
   let asciiFrame = '';
   for (let y = 0; y < height; y += 2) {
     for (let x = 0; x < width; x++) {
       const index = (y * width + x) * 4;
       const brightness = (imageData[index] + imageData[index + 1] + imageData[index + 2]) / 3;
-      const charIndex = Math.floor(brightness / 25);
+      let charIndex = Math.floor(brightness / 25);
+      
+      // Modify character based on audio level
+      charIndex = Math.min(charIndex + Math.floor(audioLevel * 5), asciiChars.length - 1);
+      
       asciiFrame += asciiChars[charIndex] || ' ';
     }
     asciiFrame += '\n';
@@ -140,13 +161,19 @@ function getAsciiFrame(imageData, width, height) {
 function processVideoFrame(video, canvas, ctx) {
   ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-  const asciiFrame = getAsciiFrame(imageData, canvas.width, canvas.height);
+  
+  // Get audio level
+  analyser.getByteFrequencyData(audioDataArray);
+  const audioLevel = audioDataArray.reduce((a, b) => a + b) / audioDataArray.length / 255;
+  
+  const asciiFrame = getAsciiFrame(imageData, canvas.width, canvas.height, audioLevel);
 
   room.send({
     type: 'asciiFrame',
     frame: asciiFrame,
     clientId: room.party.client.id,
-    username: room.party.client.username
+    username: room.party.client.username,
+    audioLevel: audioLevel
   });
 
   if (isRecording) {
@@ -156,7 +183,7 @@ function processVideoFrame(video, canvas, ctx) {
 
 startBtn.addEventListener('click', async () => {
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: true });
     const video = document.createElement('video');
     video.srcObject = stream;
     video.play();
@@ -166,6 +193,14 @@ startBtn.addEventListener('click', async () => {
     canvas.width = 160;
     canvas.height = 120;
 
+    // Set up audio context and analyser
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const source = audioContext.createMediaStreamSource(stream);
+    analyser = audioContext.createAnalyser();
+    analyser.fftSize = 256;
+    source.connect(analyser);
+    audioDataArray = new Uint8Array(analyser.frequencyBinCount);
+
     isRecording = true;
     startBtn.disabled = true;
     stopBtn.disabled = false;
@@ -174,7 +209,7 @@ startBtn.addEventListener('click', async () => {
       processVideoFrame(video, canvas, ctx);
     };
   } catch (error) {
-    console.error('Error accessing webcam:', error);
+    console.error('Error accessing webcam or microphone:', error);
   }
 });
 
@@ -182,7 +217,34 @@ stopBtn.addEventListener('click', () => {
   isRecording = false;
   startBtn.disabled = false;
   stopBtn.disabled = true;
+  if (audioContext) {
+    audioContext.close();
+  }
 });
+
+const audioElements = {};
+
+function toggleAudio(clientId) {
+  const audioControl = document.querySelector(`#ascii-${clientId} .audioControl`);
+  if (audioElements[clientId]) {
+    if (audioElements[clientId].paused) {
+      audioElements[clientId].play();
+      audioControl.textContent = '🔊';
+    } else {
+      audioElements[clientId].pause();
+      audioControl.textContent = '🔇';
+    }
+  }
+}
+
+function updateAudioVisual(clientId, audioLevel) {
+  const asciiOutput = document.getElementById(`ascii-${clientId}`);
+  if (asciiOutput) {
+    const audioVisual = '█'.repeat(Math.floor(audioLevel * 10));
+    const audioControl = asciiOutput.querySelector('.audioControl');
+    audioControl.textContent = audioControl.textContent.slice(0, 1) + audioVisual;
+  }
+}
 
 room.onmessage = (event) => {
   const data = event.data;
@@ -190,8 +252,33 @@ room.onmessage = (event) => {
     const asciiOutput = document.getElementById(`ascii-${data.clientId}`);
     if (asciiOutput) {
       const usernameElement = asciiOutput.querySelector('.username');
+      const audioControl = asciiOutput.querySelector('.audioControl');
       asciiOutput.textContent = data.frame;
       asciiOutput.prepend(usernameElement);
+      asciiOutput.appendChild(audioControl);
+      
+      updateAudioVisual(data.clientId, data.audioLevel);
+
+      // Create or update audio element
+      if (!audioElements[data.clientId]) {
+        const audio = new Audio();
+        audio.autoplay = true;
+        audioElements[data.clientId] = audio;
+      }
+      
+      // Use Web Audio API to create a tone based on the audio level
+      const oscillator = audioContext.createOscillator();
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(440 + data.audioLevel * 880, audioContext.currentTime);
+      
+      const gainNode = audioContext.createGain();
+      gainNode.gain.setValueAtTime(data.audioLevel, audioContext.currentTime);
+      
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+      
+      oscillator.start();
+      oscillator.stop(audioContext.currentTime + 0.1);
     }
   }
 };
