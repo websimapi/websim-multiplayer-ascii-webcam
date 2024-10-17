@@ -1,4 +1,4 @@
-<html><head><base href="https://websim.ai"><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Multiplayer ASCII Webcam Grid with Audio</title>
+<html><head><base href="https://websim.ai"><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Multiplayer ASCII Webcam Grid with Non-Interfering Audio</title>
 <style>
   body {
     font-family: monospace;
@@ -183,7 +183,16 @@ function processVideoFrame(video, canvas, ctx) {
 
 startBtn.addEventListener('click', async () => {
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: true });
+    const stream = await navigator.mediaDevices.getUserMedia({ 
+      video: { width: 640, height: 480 },
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: false,
+        sampleRate: 44100,
+        channelCount: 1
+      }
+    });
     const video = document.createElement('video');
     video.srcObject = stream;
     video.play();
@@ -266,19 +275,21 @@ room.onmessage = (event) => {
         audioElements[data.clientId] = audio;
       }
       
-      // Use Web Audio API to create a tone based on the audio level
-      const oscillator = audioContext.createOscillator();
-      oscillator.type = 'sine';
-      oscillator.frequency.setValueAtTime(440 + data.audioLevel * 880, audioContext.currentTime);
-      
-      const gainNode = audioContext.createGain();
-      gainNode.gain.setValueAtTime(data.audioLevel, audioContext.currentTime);
-      
-      oscillator.connect(gainNode);
-      gainNode.connect(audioContext.destination);
-      
-      oscillator.start();
-      oscillator.stop(audioContext.currentTime + 0.1);
+      // Use Web Audio API to create a subtle audio visualization
+      if (audioContext) {
+        const oscillator = audioContext.createOscillator();
+        oscillator.type = 'sine';
+        oscillator.frequency.setValueAtTime(440 + data.audioLevel * 440, audioContext.currentTime);
+        
+        const gainNode = audioContext.createGain();
+        gainNode.gain.setValueAtTime(data.audioLevel * 0.1, audioContext.currentTime);
+        
+        oscillator.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+        
+        oscillator.start();
+        oscillator.stop(audioContext.currentTime + 0.1);
+      }
     }
   }
 };
